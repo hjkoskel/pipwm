@@ -1,21 +1,34 @@
 /*
 Pulse gadget.
 Simple gadget using  128x64 oled display and 4x4 matrix keyboad
+
+
+TODO ELOKUUSSA
+- pulsegenui + tekstimoodi 128x64. tai yksittäiset komennot
+	- Sekä sim että ei simulaatio (interfacet)
+- Juurihakemistossa vain main funktio ja komentoriviflägien parsinta?
+- graafinen SDL gadgetti alihakemistoon
+
+EIKU TEKEE JUUREEN SELLAISEN ETTÄ SILLÄ SAA PYÖRIMÄÄN.
+pulsegenui:hin niitä mitä tarvii graafiseen käyttöliittymäänkin
+	- simulaatio vain?
+	- raspin työpöydällä?
+
+- SIIRRÄ HARDWARE PWM jutut govattuun ja pulseratioiden laskeminen yms!!!
+
 */
 
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"time"
 
-	"github.com/hjkoskel/goDisKeySystem/hwLayer"
 	"github.com/hjkoskel/gomonochromebitmap"
 	"github.com/hjkoskel/govattu"
-
-	"github.com/hjkoskel/pipwm/pulseGenUi"
-
+	"github.com/hjkoskel/pipwm/pulsegenui"
 )
 
 const (
@@ -26,74 +39,40 @@ const (
 )
 
 const (
-	KEYPOLLINTERVALMS=50
+	KEYPOLLINTERVALMS = 50
 )
-
-/*
-Nice keyboard helper
-*/
-
-type MatrixGpioKeyboard struct {
-	DriveRows []uint8
-	InputCols []uint8
-	Buttons   [][]string //Coding: [driveRow][inputCol]
-	prevState []string   //Compare here,
-}
-
-func (p *MatrixGpioKeyboard) Init() {
-	for _, pin := range p.DriveRows {
-		govattu.PinMode(pin, govattu.ALTinput)
-		govattu.PullMode(pin, govattu.PULLdown)
-	}
-	for _, pin := range p.InputCols {
-		govattu.PinMode(pin, govattu.ALTinput)
-		govattu.PullMode(pin, govattu.PULLdown)
-	}
-}
-
-type SetOfPressedKeys []string
-
-func (p *SetOfPressedKeys) Equal(ref SetOfPressedKeys) bool {
-	if len(*p) != len(ref) {
-		return false //can not be same
-	}
-	for i, v := range *p {
-		if ref[i] != v {
-			return false
-		}
-	}
-	return true
-}
-
-/*
-Just scans situation now
-*/
-func (p *MatrixGpioKeyboard) Scan() SetOfPressedKeys {
-	result := []string{}
-	for driveRowNumber, drivePin := range p.DriveRows {
-		govattu.PinMode(drivePin, govattu.ALToutput)
-		govattu.PinSet(drivePin)
-
-		//time.Sleep(time.Millisecond * 200)
-		keymask := govattu.ReadAllPinLevels()
-		//fmt.Printf("Drive:%v  regs:%b\n", driveRowNumber, keymask)
-
-		names := p.Buttons[driveRowNumber]
-		for inputColNumber, name := range names {
-			if 0 < (keymask & (1 << p.InputCols[inputColNumber])) {
-				result = append(result, name)
-			}
-		}
-		govattu.PinClear(drivePin)
-		govattu.PinMode(drivePin, govattu.ALTinput)
-	}
-	//fmt.Printf("Keys hit %#v\n", result)
-	return result
-}
 
 /*
 gives channels
 */
+func setPwm0Generator(cmd pulsegenui.PulseHardwareCommand) error {
+	if !(0 < cmd.Rf.On) || !cmd.OutputEnabled { //SHUTDOWN TO LO
+		hw.SetPWM0Lo()
+		return nil
+	}
+
+	if !(0 < cmd.Rf.Off) { //SHUTDOWN TO HI
+		hw.SetPWM0Hi()
+		return nil
+	}
+
+	//pulseTiming := govattu.RfPulseSettings{On: cmd.Rf.On, Off: cmd.Rf.Off}
+	pulseSettings, pulseErr := cmd.Rf.GetSettings()
+	if pulseErr != nil {
+		return pulseErr
+	}
+
+	if pulseSettings.Pwmr <= pulseSettings.Pwm {
+		return fmt.Errorf("Cant do requested on/off  %v/%v us pulse", float64(cmd.Rf.On.Nanoseconds())/1000.0, float64(cmd.Rf.Off.Nanoseconds())/1000.0)
+	}
+
+	if 4095 < pulseSettings.Pwmc {
+		return fmt.Errorf("Cant do requested on/off  %v/%v us pulse pwmc can not be divided more", float64(cmd.Rf.On.Nanoseconds())/1000.0, float64(cmd.Rf.Off.Nanoseconds())/1000.0)
+	}
+
+	hw.SetToHwPWM0(&pulseSettings)
+	return nil
+}
 
 /*
 func runWithRealHardware(bitmapCh chan gomonochromebitmap.MonoBitmap, keysCh chan string) (govattu.RaspiHw, error) {
@@ -101,66 +80,142 @@ func runWithRealHardware(bitmapCh chan gomonochromebitmap.MonoBitmap, keysCh cha
 }
 */
 
+var hw govattu.Vattu
+
 func main() {
+
+	pSimHw := flag.Bool("simhw", false, "simulate ALL hardware")
+	pSimKeyboard := flag.Bool("simkey", false, "simulate 4x4 matrix keyboard with console keypresses")
+	pSimDisplay := flag.Bool("simdisp", false, "simulate ssd1306 with console printout")
+	flag.Parse()
+
+	//fmt.Printf("pSimHw=%v,pSimKeyboard=%v,pSimDisplay=%v\n", *pSimHw, *pSimKeyboard, *pSimDisplay)
+	//return
+
+	if *pSimHw {
+		fmt.Printf("SIMULATING ALL HARWARE\n")
+	} else {
+		if *pSimDisplay {
+			fmt.Printf("SIMULATING DISPLAY\n")
+		}
+		if *pSimKeyboard {
+			fmt.Printf("SIMULATING KEYBOARD\n")
+		}
+	}
+
 	BitmapCh := make(chan gomonochromebitmap.MonoBitmap, 1)
 	CmdCh := make(chan string, 3) //Key pressesses. This gadget takes only one press per time
-	ui := pulseGenUi.PulsGenUi{Bitmap: BitmapCh, Cmd: CmdCh, Simulate: false}
+	ui := pulsegenui.PulsGenUi{Bitmap: BitmapCh, Cmd: CmdCh, RfCmd: make(chan pulsegenui.PulseHardwareCommand, 10)}
 
-	hw, err := govattu.Open()
-	if err != nil {
-		fmt.Printf("Raspberry hardware fail %v\n",err.Error())
-		os.Exit(-1)
+	var errhw error
+
+	if *pSimHw {
+		hw = &govattu.DoNothingPi{}
+	} else {
+		hw, errhw = govattu.Open()
+		if errhw != nil {
+			fmt.Printf("Raspberry hardware fail %v\n", errhw.Error())
+			os.Exit(-1)
+		}
 	}
 	defer hw.Close()
 
-	hardwareKeyboard := MatrixGpioKeyboard{
-		//	BCM codes
-		DriveRows: []uint8{12, 16, 20, 21},
-		InputCols: []uint8{26, 19, 13, 6},
-		Buttons: [][]string{
-			[]string{pulseGenUi.CMDBTN_UP, pulseGenUi.CMDBTN_9, pulseGenUi.CMDBTN_8, pulseGenUi.CMDBTN_7},
-			[]string{pulseGenUi.CMDBTN_DOWN, pulseGenUi.CMDBTN_6, pulseGenUi.CMDBTN_5, pulseGenUi.CMDBTN_4},
-			[]string{pulseGenUi.CMDBTN_BACK, pulseGenUi.CMDBTN_3, pulseGenUi.CMDBTN_2, pulseGenUi.CMDBTN_1},
-			[]string{pulseGenUi.CMDBTN_OK, pulseGenUi.CMDBTN_DECIMALPOINT, pulseGenUi.CMDBTN_0, pulseGenUi.CMDBTN_ONOFF}}, //Coding: [driveRow][inputCol]
+	var hardwareKeyboard KeyboardInterface
+
+	if *pSimHw || *pSimKeyboard {
+		hardwareKeyboard = KeyboardInterface(&FakeMatrixKeyboard{})
+	} else {
+		hardwareKeyboard = KeyboardInterface(&MatrixGpioKeyboard{
+			//	BCM codes
+			DriveRows: []uint8{12, 16, 20, 21},
+			InputCols: []uint8{26, 19, 13, 6},
+			Buttons: [][]string{
+				[]string{pulsegenui.CMDBTN_UP, pulsegenui.CMDBTN_9, pulsegenui.CMDBTN_8, pulsegenui.CMDBTN_7},
+				[]string{pulsegenui.CMDBTN_DOWN, pulsegenui.CMDBTN_6, pulsegenui.CMDBTN_5, pulsegenui.CMDBTN_4},
+				[]string{pulsegenui.CMDBTN_BACK, pulsegenui.CMDBTN_3, pulsegenui.CMDBTN_2, pulsegenui.CMDBTN_1},
+				[]string{pulsegenui.CMDBTN_OK, pulsegenui.CMDBTN_DECIMALPOINT, pulsegenui.CMDBTN_0, pulsegenui.CMDBTN_ONOFF}}, //Coding: [driveRow][inputCol]
+		})
 	}
 
 	hardwareKeyboard.Init()
-	go func() {
-		prevKeyStatus := hardwareKeyboard.Scan()
-		for {
-			keyStatus := hardwareKeyboard.Scan()
-			time.Sleep(KEYPOLLINTERVALMS * time.Millisecond)
-			if !keyStatus.Equal(prevKeyStatus) {
-				prevKeyStatus = keyStatus
-				if len(keyStatus) == 0 {
-					CmdCh <- pulseGenUi.CMDBTN_RELEASE //Changed and nothing pressed. report as released
-				} else {
-					for _, cmd := range keyStatus {
-						CmdCh <- cmd
+
+	if *pSimHw || *pSimKeyboard {
+		go func() {
+			for {
+				keyStatus := hardwareKeyboard.Scan()
+				for _, cmd := range keyStatus {
+					CmdCh <- cmd
+				}
+				//time.Sleep(time.Millisecond * 100)
+			}
+		}()
+
+		go func() {
+			for {
+				if len(CmdCh) == 0 {
+					CmdCh <- pulsegenui.CMDBTN_RELEASE
+				}
+				//time.Sleep(KEYPOLLINTERVALMS * time.Millisecond * 10)
+				time.Sleep(time.Millisecond * 100)
+			}
+		}() //HACK
+	} else {
+		go func() {
+			prevKeyStatus := hardwareKeyboard.Scan()
+			for {
+				keyStatus := hardwareKeyboard.Scan()
+				time.Sleep(KEYPOLLINTERVALMS * time.Millisecond)
+				if !keyStatus.Equal(prevKeyStatus) {
+					prevKeyStatus = keyStatus
+					if len(keyStatus) == 0 {
+						CmdCh <- pulsegenui.CMDBTN_RELEASE //Changed and nothing pressed. report as released
+					} else {
+						for _, cmd := range keyStatus {
+							CmdCh <- cmd
+						}
 					}
 				}
 			}
-		}
-	}()
-	//Display init
-	fDisplay, errI2CHardware := os.OpenFile(I2CDEVICEFILE, os.O_RDWR, 0600)
-	if errI2CHardware != nil {
-		fmt.Printf("I2C Hardware open error %v", errI2CHardware.Error())
-		os.Exit(-1)
+		}()
 	}
 
-	oled, errOled := hwLayer.InitSSD1306_i2c(fDisplay, I2CADDRESS_OLED)
-	if errOled != nil {
-		fmt.Printf("I2C display init error %v", errOled.Error())
-		os.Exit(-1)
+	var oled BW128x64Display
+	var errOled error
+
+	if *pSimHw || *pSimDisplay {
+		oled = &Fakedisplay128x64{}
+	} else {
+		//Display init
+		fDisplay, errI2CHardware := os.OpenFile(I2CDEVICEFILE, os.O_RDWR, 0600)
+		if errI2CHardware != nil {
+			fmt.Printf("I2C Hardware open error %v", errI2CHardware.Error())
+			os.Exit(-1)
+		}
+
+		var oledhw SSD1306_i2c
+		oledhw, errOled = InitSSD1306_i2c(fDisplay, I2CADDRESS_OLED)
+		if errOled != nil {
+			fmt.Printf("I2C display init error %v", errOled.Error())
+			os.Exit(-1)
+		}
+		oled = BW128x64Display(&oledhw)
 	}
 
 	go func() {
 		for {
-			oled.FullDisplayUpdate(hwLayer.BitmapToSSD1306Buffer(<-BitmapCh, false))
+			oled.FullDisplayUpdate(BitmapToSSD1306Buffer(<-BitmapCh, false))
+		}
+	}()
+
+	go func() {
+		for {
+			errSet := setPwm0Generator(<-ui.RfCmd)
+			if errSet != nil {
+				fmt.Printf("ERROR %v", errSet)
+				os.Exit(-1)
+			}
 		}
 	}()
 
 	ui.Run() //This is where "business logic is ticking".
-
 }

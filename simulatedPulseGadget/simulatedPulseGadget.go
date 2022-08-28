@@ -5,6 +5,7 @@ Can be used for testing OLED ui rendering and PWM calcuations
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,9 +13,9 @@ import (
 	"os"
 
 	"github.com/hjkoskel/gomonochromebitmap"
-	"github.com/hjkoskel/pipwm/pulseGenUi"
-
 	"github.com/hjkoskel/gomonochromebitmap/gadgetSimUi"
+	"github.com/hjkoskel/govattu"
+	"github.com/hjkoskel/pipwm/pulsegenui"
 )
 
 const (
@@ -38,12 +39,57 @@ const (
 	BITMAP_DRAWBUTTONAREAS = false
 )
 
+func setPwm0Generator(cmd pulsegenui.PulseHardwareCommand) error {
+	if !(0 < cmd.Rf.On) || !cmd.OutputEnabled { //SHUTDOWN TO LO
+		hw.SetPWM0Lo()
+		return nil
+	}
+
+	if !(0 < cmd.Rf.Off) { //SHUTDOWN TO HI
+		hw.SetPWM0Hi()
+		return nil
+	}
+
+	//pulseTiming := govattu.RfPulseSettings{On: cmd.Rf.On, Off: cmd.Rf.Off}
+	pulseSettings, pulseErr := cmd.Rf.GetSettings()
+	if pulseErr != nil {
+		return pulseErr
+	}
+
+	if pulseSettings.Pwmr <= pulseSettings.Pwm {
+		return fmt.Errorf("Cant do requested on/off  %v/%v us pulse", float64(cmd.Rf.On.Nanoseconds())/1000.0, float64(cmd.Rf.Off.Nanoseconds())/1000.0)
+	}
+
+	if 4095 < pulseSettings.Pwmc {
+		return fmt.Errorf("Cant do requested on/off  %v/%v us pulse pwmc can not be divided more", float64(cmd.Rf.On.Nanoseconds())/1000.0, float64(cmd.Rf.Off.Nanoseconds())/1000.0)
+	}
+
+	hw.SetToHwPWM0(&pulseSettings)
+	return nil
+}
+
+var hw govattu.Vattu
+
 func main() {
-	sim := true
+	pRealHw := flag.Bool("hw", false, "use real raspberry hw pwm")
+	flag.Parse()
+
+	if *pRealHw {
+		var errhw error
+		hw, errhw = govattu.Open()
+		if errhw != nil {
+			fmt.Printf("Raspberry hardware fail %v\n", errhw.Error())
+			os.Exit(-1)
+		}
+	} else {
+		hw = &govattu.DoNothingPi{}
+	}
+	defer hw.Close()
 
 	BitmapCh := make(chan gomonochromebitmap.MonoBitmap, 1)
 	CmdCh := make(chan string, 3) //Key pressesses. This gadget takes only one press per time
-	ui := pulseGenUi.PulsGenUi{Bitmap: BitmapCh, Cmd: CmdCh, Simulate: sim}
+	//ui := pulsegenui.PulsGenUi{Bitmap: BitmapCh, Cmd: CmdCh}
+	ui := pulsegenui.PulsGenUi{Bitmap: BitmapCh, Cmd: CmdCh, RfCmd: make(chan pulsegenui.PulseHardwareCommand, 10)}
 
 	go ui.Run() //This is where "business logic is ticking". Leaving main loop for SDL library, it likes that
 
@@ -79,28 +125,28 @@ func main() {
 		},
 		Buttons: []gadgetSimUi.ButtonSettings{
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_7,
+				ID:         pulsegenui.CMDBTN_7,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL0, Y: BITMAP_ROW0},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_8,
+				ID:         pulsegenui.CMDBTN_8,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL1, Y: BITMAP_ROW0},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_9,
+				ID:         pulsegenui.CMDBTN_9,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL2, Y: BITMAP_ROW0},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_UP,
+				ID:         pulsegenui.CMDBTN_UP,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL3, Y: BITMAP_ROW0},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
@@ -108,28 +154,28 @@ func main() {
 			},
 
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_4,
+				ID:         pulsegenui.CMDBTN_4,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL0, Y: BITMAP_ROW1},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_5,
+				ID:         pulsegenui.CMDBTN_5,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL1, Y: BITMAP_ROW1},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_6,
+				ID:         pulsegenui.CMDBTN_6,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL2, Y: BITMAP_ROW1},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_DOWN,
+				ID:         pulsegenui.CMDBTN_DOWN,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL3, Y: BITMAP_ROW1},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
@@ -137,28 +183,28 @@ func main() {
 			},
 
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_1,
+				ID:         pulsegenui.CMDBTN_1,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL0, Y: BITMAP_ROW2},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_2,
+				ID:         pulsegenui.CMDBTN_2,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL1, Y: BITMAP_ROW2},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_3,
+				ID:         pulsegenui.CMDBTN_3,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL2, Y: BITMAP_ROW2},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_BACK,
+				ID:         pulsegenui.CMDBTN_BACK,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL3, Y: BITMAP_ROW2},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
@@ -166,28 +212,28 @@ func main() {
 			},
 
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_ONOFF,
+				ID:         pulsegenui.CMDBTN_ONOFF,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL0, Y: BITMAP_ROW3},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_0,
+				ID:         pulsegenui.CMDBTN_0,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL1, Y: BITMAP_ROW3},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_DECIMALPOINT,
+				ID:         pulsegenui.CMDBTN_DECIMALPOINT,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL2, Y: BITMAP_ROW3},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
 				DebugEdges: BITMAP_DRAWBUTTONAREAS,
 			},
 			gadgetSimUi.ButtonSettings{
-				ID:         pulseGenUi.CMDBTN_OK,
+				ID:         pulsegenui.CMDBTN_OK,
 				Corner:     gadgetSimUi.XyIntPair{X: BITMAP_COL3, Y: BITMAP_ROW3},
 				Dimensions: btnDimOnBitmap,
 				DebugColor: buttonDebugColor,
@@ -212,6 +258,19 @@ func main() {
 				CmdCh <- ""
 			} else {
 				CmdCh <- arr[0] //Single press only
+			}
+		}
+	}()
+
+	//Execute or just print out what hardware would do
+	go func() {
+		for {
+			newcmd := <-ui.RfCmd
+			fmt.Printf("CMD: %s\n", newcmd)
+			errSet := setPwm0Generator(<-ui.RfCmd)
+			if errSet != nil {
+				fmt.Printf("ERROR %v", errSet)
+				os.Exit(-1)
 			}
 		}
 	}()

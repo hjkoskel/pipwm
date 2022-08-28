@@ -22,7 +22,7 @@ prints out commands.  The verbose option "-v" allows to see how bad the quantiza
 
 ## Examples ##
 
-Controllin servo to zero, min and max
+Controlling servo to zero, min and max
 ```sh
 sudo ./pipwm -v -sa 0
 sudo ./pipwm -v -sa -90
@@ -41,42 +41,3 @@ Calculate by using hi time and percent
 sudo ./pipwm -hi 9000 -p 5 -v
 ```
 
-## Hardware support ##
-
-###
-
-### 4x4 button matrix ###
-For standalone gadget usage, software supports scanned 4x4 matrix keypad connected to GPIO pins
-
-[]()  |
-------|------
-Row 1 | row 2
-
-
-Keys are
-
-[]()    |       |         |
---------|-------|---------|-------
-   7    |   8   |   9     |   UP
-   4    |   5   |   6     |   DN
-   1    |   2   |   3     |   BK
-   ON   |   0   |   OFF   |   OK
-
-### GPIO-Button: On/Off toggle ###
-At start raspberry checks "not pressed state". Code will decide is switch
-normal up or normal false.
-
-Change input and it pulse settings will toggle
-
-Generator starts from off state.
-
-### Button: Enable ###
-Single button. Pull pin to gnd = enable, leave open disable
-
-
-
-## PulseGadget
-This is more complicated example. Uses 128x64 oled I2C display and 4x4 matrix keyboard
-
-## Simulated Pulse Gadget
-Example how to develop oled and button interfaces on pc

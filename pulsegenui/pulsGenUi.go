@@ -3,7 +3,7 @@ Embedded function generator with display and keys
 Produces 128x64 bitmap and recieves commands from 4x4 keypad. Virtual or real
 
 */
-package pulseGenUi
+package pulsegenui
 
 import (
 	"fmt"
@@ -148,10 +148,23 @@ func (p *UiPageServo) LimitAngle(minAngle float32, maxAngle float32) {
 	p.Angle = float32(math.Max(float64(minAngle), math.Min(float64(maxAngle), float64(p.Angle))))
 }
 
+type PulseHardwareCommand struct {
+	OutputEnabled bool
+	Rf            govattu.RfPulseSettings
+}
+
+func (a PulseHardwareCommand) String() string {
+	if a.OutputEnabled {
+		return fmt.Sprintf("ENABLED on:%s off:%s", a.Rf.On, a.Rf.Off)
+	}
+	return fmt.Sprintf("DISABLE (on:%s off:%s)", a.Rf.On, a.Rf.Off)
+}
+
 type PulsGenUi struct {
-	Simulate bool //Important when testing
-	Bitmap   chan gomonochromebitmap.MonoBitmap
-	Cmd      chan string //Key pressesses. This gadget takes only one press per time
+	//Simulate bool //Important when testing
+	Bitmap chan gomonochromebitmap.MonoBitmap
+	Cmd    chan string //Key pressesses. This gadget takes only one press per time
+	RfCmd  chan PulseHardwareCommand
 
 	//---- status composed to status bar -----
 	SignalOut bool //Is feeding actively
@@ -177,42 +190,44 @@ func (p *PulsGenUi) readKey() string {
 	if cmd == CMDBTN_ONOFF {
 		p.toggleOutputOnOff()
 	}
+
 	return cmd
 }
 
 //This is main place where values are set
 
 func (p *PulsGenUi) setHardwareFromRegisters() {
-	if !p.Simulate {
-		if p.StatusRegs.Registers.IsOffline() {
-			p.SignalOut = false //Disable output
-		}
-		if p.SignalOut {
-			p.StatusRegs.Registers.SetToHwPWM0()
-		} else {
-			//Just keep out
-			govattu.SetPWM0Lo()
-		}
+	//if !p.Simulate {
+	if p.StatusRegs.Registers.IsOffline() {
+		p.SignalOut = false //Disable output
 	}
+
+	p.RfCmd <- PulseHardwareCommand{OutputEnabled: p.SignalOut, Rf: p.StatusRegs.Registers.GetTiming()}
+	//}
 }
 
-func (p *PulsGenUi) setHardwareFromLoHi() {
+func (p *PulsGenUi) setHardwareFromLoHi() error {
 	//fmt.Printf("TODO SET HARDWARE FROM LO:%f ns HI:%f ns\n",p.StatusLoHi.Lo,p.StatusLoHi.Hi)
 	d := p.StatusLoHi
 	pt := govattu.RfPulseSettings{
 		On:  time.Duration(time.Nanosecond * time.Duration(d.Hi*float64(d.Scale))),
 		Off: time.Duration(time.Nanosecond * time.Duration(d.Lo*float64(d.Scale))),
 	}
-	p.StatusRegs.Registers = pt.GetSettings()
+	var err error
+	p.StatusRegs.Registers, err = pt.GetSettings()
+	if err != nil {
+		return err
+	}
 	p.setHardwareFromRegisters()
+	return err
 }
 
 //Idea of chained settings
-func (p *PulsGenUi) setHardwareFromServo() {
+func (p *PulsGenUi) setHardwareFromServo() error {
 	p.StatusLoHi.Hi = float64((p.StatusServo.Angle/90)*0.5 + 1.5)
 	p.StatusLoHi.Lo = (20 - p.StatusLoHi.Hi) //20ms
 	p.StatusLoHi.Scale = SCALETIME_MILLI
-	p.setHardwareFromLoHi()
+	return p.setHardwareFromLoHi()
 }
 
 func (p *PulsGenUi) initializeBitmapWithHeader() gomonochromebitmap.MonoBitmap {
@@ -586,8 +601,8 @@ func (p *PulsGenUi) runServo() {
 			p.StatusServo.Angle -= p.getServoAngleFromRelease()
 		}
 		p.StatusServo.LimitAngle(SERVOMINANGLE, SERVOMAXANGLE)
-		p.setHardwareFromServo()
 		p.renderServo()
+		p.setHardwareFromServo()
 		cmdGiven = p.readKey()
 	}
 }
